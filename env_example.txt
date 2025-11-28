@@ -1,0 +1,14 @@
+# edgeX Account Credentials (REQUIRED for API access)
+# Find these in your edgeX account under "API Management"
+EDGEX_ACCOUNT_ID=your_account_id_here
+EDGEX_STARK_PRIVATE_KEY=your_stark_private_key_here
+
+
+# EdgeX API Endpoints
+EDGEX_BASE_URL=https://pro.edgex.exchange
+EDGEX_WS_URL=wss://quote.edgex.exchange
+
+# Lighter Configuration
+API_KEY_PRIVATE_KEY=your_api_key_private_key_here
+LIGHTER_ACCOUNT_INDEX=your_account_index
+LIGHTER_API_KEY_INDEX=your_api_key_index
