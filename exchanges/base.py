@@ -57,7 +57,8 @@ class OrderInfo:
     remaining_size: Decimal = 0.0
     cancel_reason: str = ''
 
-
+# Abstract Base Class（抽象基类） 的缩写，核心作用是定义抽象接口、强制子类实现指定方法、限制抽象类不能被实例化，是实现 “接口规范” 的关键机制。表明这是一个抽象类
+# 其中被 @abstractmethod 装饰的方法（如 connect、place_open_order 等）是 “必须实现的接口”
 class BaseExchangeClient(ABC):
     """Base class for all exchange clients."""
 
