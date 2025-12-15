@@ -83,37 +83,52 @@ class EdgexArb:
         self._setup_callbacks()
 
     def _setup_logger(self):
-        """Setup logging configuration."""
+        """
+        配置日志系统（核心功能：为套利机器人创建专属的日志记录器，同时输出到文件和控制台）
+        """
+        # 1. 确保日志目录存在：创建logs文件夹，exist_ok=True表示若已存在则不报错
         os.makedirs("logs", exist_ok=True)
+        # 拼接日志文件路径：格式为 logs/edgex_<交易对>_log.txt（如logs/edgex_BTC_USDT_log.txt）
         self.log_filename = f"logs/edgex_{self.ticker}_log.txt"
 
+        # 2. 创建专属的日志记录器实例
+        # 命名规则：arbitrage_bot_<交易对>，确保不同交易对的日志器相互独立，避免冲突
         self.logger = logging.getLogger(f"arbitrage_bot_{self.ticker}")
+        # 设置日志器的基础级别为INFO：仅记录INFO及以上级别（INFO/WARNING/ERROR/CRITICAL）的日志
         self.logger.setLevel(logging.INFO)
+        # 清空该日志器已有的所有处理器：避免重复添加处理器导致日志重复输出
         self.logger.handlers.clear()
 
-        # Disable verbose logging from external libraries
-        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        # 3. 屏蔽第三方库的冗余日志（降低日志噪音）
+        # urllib3/requests/websockets是常用网络库，默认日志级别低，会输出大量无关信息
+        logging.getLogger('urllib3').setLevel(logging.WARNING)  # 仅记录WARNING及以上
         logging.getLogger('requests').setLevel(logging.WARNING)
         logging.getLogger('websockets').setLevel(logging.WARNING)
 
-        # Create file handler
+        # 4. 创建文件处理器：负责将日志写入指定的文件
         file_handler = logging.FileHandler(self.log_filename)
+        # 文件处理器的日志级别：与日志器保持一致（仅记录INFO及以上）
         file_handler.setLevel(logging.INFO)
 
-        # Create console handler
+        # 5. 创建控制台处理器：负责将日志输出到终端（sys.stdout表示标准输出，即控制台）
         console_handler = logging.StreamHandler(sys.stdout)
+        # 控制台处理器的日志级别：同样仅记录INFO及以上
         console_handler.setLevel(logging.INFO)
 
-        # Create formatters
+        # 6. 定义日志格式器：规范日志的输出格式
+        # 文件日志格式：时间 - 日志器名称 - 日志级别 - 日志内容（便于后续排查问题）
         file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        # 控制台日志格式：级别:日志器名:内容（简化格式，便于终端快速查看）
         console_formatter = logging.Formatter('%(levelname)s:%(name)s:%(message)s')
 
+        # 7. 为处理器绑定格式器：让文件/控制台输出对应格式的日志
         file_handler.setFormatter(file_formatter)
         console_handler.setFormatter(console_formatter)
 
-        # Add handlers
+        # 8. 将处理器添加到日志器：日志器会同时通过这两个处理器输出日志
         self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
+        # 关闭日志传播：避免该日志器的日志被传递到父级/根日志器，导致重复输出
         self.logger.propagate = False
 
     def _setup_callbacks(self):
