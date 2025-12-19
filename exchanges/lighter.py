@@ -69,6 +69,7 @@ class LighterClient(BaseExchangeClient):
 
     async def _get_market_config(self, ticker: str) -> Tuple[int, int, int]:
         """Get market configuration for a ticker using official SDK."""
+        # 交易对就是 “交易的标的”，比如你想把 USDT 换成 BTC，就需要操作 BTC/USDT 这个交易对。
         try:
             # Use shared API client
             order_api = lighter.OrderApi(self.api_client)
@@ -79,7 +80,9 @@ class LighterClient(BaseExchangeClient):
             for market in order_books.order_books:
                 if market.symbol == ticker:
                     market_id = market.market_id
+                    # base_multiplier 是基础币的小数转整数乘数，核心作用是解决 “小数运算的精度问题”，本质是 10^(基础币支持的小数位数)。
                     base_multiplier = pow(10, market.supported_size_decimals)
+                    # price_multiplier 是报价币的小数转整数乘数，作用和 base_multiplier 一致，只是针对 “交易价格” 而非 “下单数量”，本质是 10^(价格支持的小数位数)。
                     price_multiplier = pow(10, market.supported_price_decimals)
 
                     # Store market info for later use
@@ -91,7 +94,7 @@ class LighterClient(BaseExchangeClient):
                         "INFO"
                     )
                     return market_id, base_multiplier, price_multiplier
-
+            # 主动抛出异常，如果上面没有return，直接抛出，然后后面exception捕获
             raise Exception(f"Ticker {ticker} not found in available markets")
 
         except Exception as e:
@@ -175,24 +178,28 @@ class LighterClient(BaseExchangeClient):
 
     def _handle_websocket_order_update(self, order_data_list: List[Dict[str, Any]]):
         """Handle order updates from WebSocket."""
+        '''接收 WebSocket 实时推送的订单数据 → 过滤目标合约 → 标准化解析字段 → 维护本地缓存 → 记录日志 → 更新当前订单状态，
+        最终为交易策略提供 “实时、准确、标准化” 的订单信息，是连接交易所和策略层的关键桥梁'''
         for order_data in order_data_list:
             if order_data['market_index'] != self.config.contract_id:
                 continue
-
+            # 如果是is_ask，就是卖单，否则是买单
             side = 'sell' if order_data['is_ask'] else 'buy'
+            # 订单类型,close是平仓，open是开仓
             if side == self.config.close_order_side:
                 order_type = "CLOSE"
             else:
                 order_type = "OPEN"
 
             order_id = order_data['order_index']
-            status = order_data['status'].upper()
-            filled_size = Decimal(order_data['filled_base_amount'])
-            size = Decimal(order_data['initial_base_amount'])
+            status = order_data['status'].upper() # status：订单状态（常见值：OPEN 挂单中、FILLED 完全成交、CANCELED 已取消、PARTIALLY_FILLED 部分成交）；
+            filled_size = Decimal(order_data['filled_base_amount'])  # 已成交数量:已成交的基础币数量（比如 BTC/USDT 中的 BTC 数量）
+            size = Decimal(order_data['initial_base_amount']) # 订单原始数量（总下单量）
             price = Decimal(order_data['price'])
-            remaining_size = Decimal(order_data['remaining_base_amount'])
+            remaining_size = Decimal(order_data['remaining_base_amount']) # 未成交数量
 
             if order_id in self.orders_cache.keys():
+                # 状态Open，且成交数量没变：continue
                 if (self.orders_cache[order_id]['status'] == 'OPEN' and
                         status == 'OPEN' and
                         filled_size == self.orders_cache[order_id]['filled_size']):
@@ -203,9 +210,11 @@ class LighterClient(BaseExchangeClient):
                     self.orders_cache[order_id]['status'] = status
                     self.orders_cache[order_id]['filled_size'] = filled_size
             elif status == 'OPEN':
+                # 缓存中无该订单，且状态是OPEN（挂单中）→ 加入缓存跟踪
                 self.orders_cache[order_id] = {'status': status, 'filled_size': filled_size}
 
             if status == 'OPEN' and filled_size > 0:
+                # 手动修正状态为 PARTIALLY_FILLED，便于后续逻辑处理（交易所推送的 status 可能只有 OPEN/FILLED/CANCELED，没有 “部分成交” 状态）
                 status = 'PARTIALLY_FILLED'
 
             if status == 'OPEN':
@@ -215,6 +224,7 @@ class LighterClient(BaseExchangeClient):
                 self.logger.log(f"[{order_type}] [{order_id}] {status} "
                                 f"{filled_size} @ {price}", "INFO")
 
+            # 如果是 “当前关注的订单”，或 “开仓订单”（OPEN），则更新 self.current_order
             if order_data['client_order_index'] == self.current_order_client_id or order_type == 'OPEN':
                 current_order = OrderInfo(
                     order_id=order_id,
@@ -228,6 +238,7 @@ class LighterClient(BaseExchangeClient):
                 )
                 self.current_order = current_order
 
+            # 当订单最终完成（成交 / 取消）时，调用专用的 “交易流水日志” 方法
             if status in ['FILLED', 'CANCELED']:
                 self.logger.log_transaction(order_id, side, filled_size, price, status)
 
@@ -237,9 +248,13 @@ class LighterClient(BaseExchangeClient):
         # Use WebSocket data if available
         if (hasattr(self, 'ws_manager') and
                 self.ws_manager.best_bid and self.ws_manager.best_ask):
+            # 最优买价（best_bid） 和最优卖价（best_ask），买方挂单：bid，卖方挂单：ask
+            # WebSocket 推送的价格可能是 float 类型（比如 45000.1），直接转 Decimal 会保留浮点精度误差（比如 Decimal(45000.1) 可能得到 45000.100000000001）；
+            # 先转字符串（str(45000.1) → "45000.1"），再转 Decimal，能精准保留十进制数值
             best_bid = Decimal(str(self.ws_manager.best_bid))
             best_ask = Decimal(str(self.ws_manager.best_ask))
 
+            # 未成交订单簿里的 best_bid <best_ask，是 “挂单未成交” 的必然结果；如果 best_bid ≥ best_ask，这两个挂单会被交易所立即撮合成交，不会留在订单簿里。
             if best_bid <= 0 or best_ask <= 0 or best_bid >= best_ask:
                 self.logger.log("Invalid bid/ask prices", "ERROR")
                 raise ValueError("Invalid bid/ask prices")
@@ -251,6 +266,7 @@ class LighterClient(BaseExchangeClient):
 
     async def _submit_order_with_retry(self, order_params: Dict[str, Any]) -> OrderResult:
         """Submit an order with Lighter using official SDK."""
+        '''这段代码有问题，并未进行重试、异常捕获、字段校验等'''
         # Ensure client is initialized
         if self.lighter_client is None:
             # This is a sync method, so we need to handle this differently
@@ -258,6 +274,7 @@ class LighterClient(BaseExchangeClient):
             raise ValueError("Lighter client not initialized. Call connect() first.")
 
         # Create order using official SDK
+        # **order_params：字典解包，将 order_params 中的键值对作为参数传递给 create_order 方法（比如 client_order_index=123、side='buy' 等）；
         create_order, tx_hash, error = await self.lighter_client.create_order(**order_params)
         if error is not None:
             return OrderResult(
